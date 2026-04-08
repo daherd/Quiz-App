@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>لوحة إدارة الاختبار</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="app">
+    <h1>لوحة إدارة الاختبار</h1>
+    <p class="muted">ارفع CSV أو الصق المحتوى مباشرة، وسيتم إنشاء رابط للطلاب + رابط متابعة النتائج.</p>
+
+    <section class="card">
+      <label for="quizTitle">عنوان الاختبار</label>
+      <input id="quizTitle" type="text" placeholder="مثال: اختبار الفيزياء - الصف العاشر" />
+
+      <label for="csvFile">ملف CSV</label>
+      <input id="csvFile" type="file" accept=".csv,text/csv" />
+
+      <label for="csvText">أو الصق CSV هنا</label>
+      <textarea id="csvText" rows="10" placeholder="question,option_a,option_b,option_c,option_d,correct_option,explanation"></textarea>
+
+      <button id="createBtn">إنشاء الاختبار</button>
+      <p id="status" class="muted"></p>
+    </section>
+
+    <section class="card links-box" id="links" style="display:none;">
+      <h2>تم إنشاء الاختبار بنجاح</h2>
+      <a id="studentLink" target="_blank" rel="noopener"></a>
+      <a id="monitorLink" target="_blank" rel="noopener"></a>
+      <p class="muted" id="countText"></p>
+    </section>
+
+    <section class="card">
+      <h3>تنسيق CSV المطلوب</h3>
+      <p class="muted">الصف الأول هو العناوين:</p>
+      <code>question,option_a,option_b,option_c,option_d,correct_option,explanation</code>
+      <p class="muted">القيمة في correct_option يجب أن تكون A أو B أو C أو D.</p>
+    </section>
+  </main>
+
+  <script>
+    const createBtn = document.getElementById("createBtn");
+    const statusEl = document.getElementById("status");
+    const csvFile = document.getElementById("csvFile");
+    const csvText = document.getElementById("csvText");
+
+    csvFile.addEventListener("change", async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      csvText.value = text;
+    });
+
+    createBtn.addEventListener("click", async () => {
+      const title = document.getElementById("quizTitle").value.trim();
+      const csv = csvText.value.trim();
+      if (!title || !csv) {
+        statusEl.textContent = "الرجاء إدخال عنوان الاختبار ومحتوى CSV.";
+        return;
+      }
+      statusEl.textContent = "جاري إنشاء الاختبار...";
+
+      try {
+        const res = await fetch("/api/create-quiz", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: title, csv_text: csv }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "فشل إنشاء الاختبار.");
+
+        const linksSection = document.getElementById("links");
+        const studentLink = document.getElementById("studentLink");
+        const monitorLink = document.getElementById("monitorLink");
+        const countText = document.getElementById("countText");
+
+        studentLink.href = data.student_link;
+        studentLink.textContent = "رابط الطالب: " + data.student_link;
+        monitorLink.href = data.monitor_link;
+        monitorLink.textContent = "رابط متابعة النتائج: " + data.monitor_link;
+        countText.textContent = `عدد الأسئلة: ${data.question_count}`;
+
+        linksSection.style.display = "block";
+        statusEl.textContent = "تم إنشاء الاختبار.";
+      } catch (err) {
+        statusEl.textContent = "خطأ: " + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

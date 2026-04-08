@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>متابعة النتائج</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="app">
+    <h1 id="title">متابعة نتائج الاختبار</h1>
+    <p class="muted">يتم التحديث كل 15 ثانية.</p>
+    <p id="status" class="muted"></p>
+
+    <section class="card" id="summary"></section>
+    <section class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>اسم الطالب</th>
+            <th>النتيجة</th>
+            <th>وقت التسليم (UTC)</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const quiz = params.get("quiz");
+    const admin = params.get("admin");
+
+    async function load() {
+      if (!quiz || !admin) {
+        document.getElementById("status").textContent = "الرابط غير صحيح أو ناقص.";
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/results/${encodeURIComponent(quiz)}?admin=${encodeURIComponent(admin)}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "تعذر تحميل النتائج.");
+
+        document.getElementById("title").textContent = "متابعة نتائج: " + data.title;
+        document.getElementById("summary").innerHTML = `
+          <h3>ملخص</h3>
+          <p>عدد التسليمات: ${data.submissions_count}</p>
+          <p>متوسط الدرجات: ${data.average_score}</p>
+        `;
+
+        const rows = document.getElementById("rows");
+        rows.innerHTML = "";
+        data.submissions.forEach((s) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${s.student_name}</td>
+            <td>${s.score} / ${s.total}</td>
+            <td>${s.submitted_at}</td>
+          `;
+          rows.appendChild(tr);
+        });
+
+        document.getElementById("status").textContent = "تم التحديث.";
+      } catch (err) {
+        document.getElementById("status").textContent = "خطأ: " + err.message;
+      }
+    }
+
+    load();
+    setInterval(load, 15000);
+  </script>
+</body>
+</html>

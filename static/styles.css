@@ -1,0 +1,95 @@
+.app {
+  max-width: 900px;
+  margin: 20px auto;
+  padding: 0 16px 40px;
+  font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+  direction: rtl;
+  text-align: right;
+}
+
+body {
+  background: #f6f8fb;
+  color: #1e293b;
+}
+
+h1, h2, h3 {
+  margin: 12px 0;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+}
+
+label {
+  display: block;
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+input, textarea, button {
+  font: inherit;
+}
+
+input[type="text"], textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #c9d4e5;
+  border-radius: 8px;
+}
+
+button {
+  background: #0057d9;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #0047b2;
+}
+
+.muted {
+  color: #5b6b81;
+}
+
+.q-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.option {
+  display: block;
+  padding: 6px 0;
+}
+
+.correct {
+  color: #0b7a3f;
+  font-weight: 700;
+}
+
+.wrong {
+  color: #b42318;
+  font-weight: 700;
+}
+
+.links-box a {
+  display: block;
+  margin: 4px 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  border-bottom: 1px solid #e3e8f2;
+  padding: 10px;
+}

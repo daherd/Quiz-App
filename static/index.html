@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>اختبار الطلاب</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="app">
+    <h1 id="quizTitle">اختبار</h1>
+    <p class="muted">أجب على جميع الأسئلة ثم اضغط إرسال.</p>
+
+    <section class="card">
+      <label for="studentName">اسم الطالب</label>
+      <input id="studentName" type="text" placeholder="اكتب اسمك الكامل" />
+    </section>
+
+    <form id="quizForm"></form>
+    <button id="submitBtn">إرسال الإجابات</button>
+    <p id="status" class="muted"></p>
+
+    <section class="card" id="results" style="display:none;"></section>
+  </main>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("quiz");
+    const form = document.getElementById("quizForm");
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    let questions = [];
+
+    async function loadQuiz() {
+      if (!token) {
+        statusEl.textContent = "الرابط غير صحيح: لا يوجد معرف اختبار.";
+        return;
+      }
+      try {
+        const res = await fetch(`/api/quiz/${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "تعذر تحميل الاختبار.");
+        document.getElementById("quizTitle").textContent = data.title;
+        questions = data.questions;
+        renderQuestions();
+      } catch (err) {
+        statusEl.textContent = "خطأ: " + err.message;
+      }
+    }
+
+    function renderQuestions() {
+      form.innerHTML = "";
+      questions.forEach((q, idx) => {
+        const section = document.createElement("section");
+        section.className = "card";
+        section.innerHTML = `
+          <div class="q-title">${idx + 1}) ${q.question}</div>
+          <label class="option"><input type="radio" name="q_${q.id}" value="A"> A) ${q.options.A}</label>
+          <label class="option"><input type="radio" name="q_${q.id}" value="B"> B) ${q.options.B}</label>
+          <label class="option"><input type="radio" name="q_${q.id}" value="C"> C) ${q.options.C}</label>
+          <label class="option"><input type="radio" name="q_${q.id}" value="D"> D) ${q.options.D}</label>
+        `;
+        form.appendChild(section);
+      });
+    }
+
+    document.getElementById("submitBtn").addEventListener("click", async (e) => {
+      e.preventDefault();
+      const studentName = document.getElementById("studentName").value.trim();
+      if (!studentName) {
+        statusEl.textContent = "الرجاء إدخال اسم الطالب.";
+        return;
+      }
+
+      const answers = {};
+      for (const q of questions) {
+        const selected = document.querySelector(`input[name="q_${q.id}"]:checked`);
+        if (!selected) {
+          statusEl.textContent = "الرجاء الإجابة على جميع الأسئلة.";
+          return;
+        }
+        answers[String(q.id)] = selected.value;
+      }
+
+      statusEl.textContent = "جاري إرسال الإجابات...";
+      try {
+        const res = await fetch(`/api/submit/${encodeURIComponent(token)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ student_name: studentName, answers }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || "تعذر إرسال الإجابات.");
+        showResults(data);
+      } catch (err) {
+        statusEl.textContent = "خطأ: " + err.message;
+      }
+    });
+
+    function showResults(data) {
+      statusEl.textContent = "تم إرسال الإجابات بنجاح.";
+      resultsEl.style.display = "block";
+      let html = `<h2>النتيجة: ${data.score} / ${data.total}</h2>`;
+      data.details.forEach((d, idx) => {
+        html += `
+          <div class="card">
+            <div class="q-title">${idx + 1}) ${d.question}</div>
+            <p class="${d.is_correct ? "correct" : "wrong"}">
+              ${d.is_correct ? "إجابة صحيحة" : "إجابة غير صحيحة"}
+            </p>
+            <p>الإجابة الصحيحة: <strong>${d.correct_option}) ${d.correct_text}</strong></p>
+            <p>الشرح: ${d.explanation}</p>
+          </div>
+        `;
+      });
+      resultsEl.innerHTML = html;
+    }
+
+    loadQuiz();
+  </script>
+</body>
+</html>
