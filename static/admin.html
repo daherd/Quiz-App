@@ -9,14 +9,18 @@
 <body>
   <main class="app">
     <h1>لوحة إدارة الاختبار</h1>
-    <p class="muted">ارفع CSV أو الصق المحتوى مباشرة، وسيتم إنشاء رابط للطلاب + رابط متابعة النتائج.</p>
+    <p class="muted">ارفع CSV أو Excel (xlsx) أو الصق المحتوى مباشرة، وسيتم إنشاء رابط للطلاب + رابط متابعة النتائج.</p>
 
     <section class="card">
       <label for="quizTitle">عنوان الاختبار</label>
       <input id="quizTitle" type="text" placeholder="مثال: اختبار الفيزياء - الصف العاشر" />
 
-      <label for="csvFile">ملف CSV</label>
-      <input id="csvFile" type="file" accept=".csv,text/csv" />
+      <label for="durationMinutes">مدة الاختبار (بالدقائق)</label>
+      <input id="durationMinutes" type="number" min="0" max="600" value="0" />
+      <p class="muted">ضع 0 إذا أردت بدون وقت محدد.</p>
+
+      <label for="csvFile">ملف CSV أو Excel</label>
+      <input id="csvFile" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
 
       <label for="csvText">أو الصق CSV هنا</label>
       <textarea id="csvText" rows="10" placeholder="question,option_a,option_b,option_c,option_d,correct_option,explanation"></textarea>
@@ -40,6 +44,7 @@
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script>
     const createBtn = document.getElementById("createBtn");
     const statusEl = document.getElementById("status");
@@ -49,15 +54,42 @@
     csvFile.addEventListener("change", async (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) return;
-      const text = await file.text();
-      csvText.value = text;
+      const filename = (file.name || "").toLowerCase();
+
+      try {
+        if (filename.endsWith(".xlsx")) {
+          const buf = await file.arrayBuffer();
+          const workbook = XLSX.read(buf, { type: "array" });
+          const firstSheetName = workbook.SheetNames[0];
+          if (!firstSheetName) {
+            throw new Error("ملف Excel لا يحتوي على أوراق.");
+          }
+          const sheet = workbook.Sheets[firstSheetName];
+          const csv = XLSX.utils.sheet_to_csv(sheet, { FS: ",", RS: "\n" });
+          csvText.value = csv;
+          statusEl.textContent = "تم تحويل ملف Excel إلى CSV بنجاح.";
+          return;
+        }
+
+        const text = await file.text();
+        csvText.value = text;
+        statusEl.textContent = "تم تحميل ملف CSV بنجاح.";
+      } catch (err) {
+        statusEl.textContent = "فشل قراءة الملف: " + err.message;
+      }
     });
 
     createBtn.addEventListener("click", async () => {
       const title = document.getElementById("quizTitle").value.trim();
       const csv = csvText.value.trim();
+      const durationRaw = document.getElementById("durationMinutes").value.trim();
+      const durationMinutes = Number(durationRaw);
       if (!title || !csv) {
         statusEl.textContent = "الرجاء إدخال عنوان الاختبار ومحتوى CSV.";
+        return;
+      }
+      if (!Number.isInteger(durationMinutes) || durationMinutes < 0 || durationMinutes > 600) {
+        statusEl.textContent = "مدة الاختبار يجب أن تكون رقمًا صحيحًا بين 0 و 600.";
         return;
       }
       statusEl.textContent = "جاري إنشاء الاختبار...";
@@ -66,7 +98,12 @@
         const res = await fetch("/api/create-quiz", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: title, csv_text: csv }),
+          body: JSON.stringify({
+            title: title,
+            csv_text: csv,
+            duration_minutes: durationMinutes,
+            creator_utc_offset_minutes: new Date().getTimezoneOffset(),
+          }),
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "فشل إنشاء الاختبار.");
@@ -80,7 +117,8 @@
         studentLink.textContent = "رابط الطالب: " + data.student_link;
         monitorLink.href = data.monitor_link;
         monitorLink.textContent = "رابط متابعة النتائج: " + data.monitor_link;
-        countText.textContent = `عدد الأسئلة: ${data.question_count}`;
+        const durationText = data.duration_minutes > 0 ? `${data.duration_minutes} دقيقة` : "بدون وقت";
+        countText.textContent = `عدد الأسئلة: ${data.question_count} | المدة: ${durationText}`;
 
         linksSection.style.display = "block";
         statusEl.textContent = "تم إنشاء الاختبار.";

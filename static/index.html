@@ -14,10 +14,13 @@
     <section class="card">
       <label for="studentName">اسم الطالب</label>
       <input id="studentName" type="text" placeholder="اكتب اسمك الكامل" />
+      <button id="startBtn" type="button">بدء الاختبار</button>
+      <p id="timerInfo" class="muted"></p>
+      <p id="countdown" class="wrong" style="display:none;"></p>
     </section>
 
     <form id="quizForm"></form>
-    <button id="submitBtn">إرسال الإجابات</button>
+    <button id="submitBtn" style="display:none;">إرسال الإجابات</button>
     <p id="status" class="muted"></p>
 
     <section class="card" id="results" style="display:none;"></section>
@@ -29,7 +32,18 @@
     const form = document.getElementById("quizForm");
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
+    const submitBtn = document.getElementById("submitBtn");
+    const startBtn = document.getElementById("startBtn");
+    const studentNameEl = document.getElementById("studentName");
+    const countdownEl = document.getElementById("countdown");
+    const timerInfoEl = document.getElementById("timerInfo");
     let questions = [];
+    let durationMinutes = 0;
+    let countdownInterval = null;
+    let isStarted = false;
+    let isSubmitting = false;
+    let isSubmitted = false;
+    const startKey = token ? `quiz_start_${token}` : null;
 
     async function loadQuiz() {
       if (!token) {
@@ -42,7 +56,12 @@
         if (!data.ok) throw new Error(data.error || "تعذر تحميل الاختبار.");
         document.getElementById("quizTitle").textContent = data.title;
         questions = data.questions;
+        durationMinutes = Number(data.duration_minutes || 0);
+        timerInfoEl.textContent = durationMinutes > 0
+          ? `مدة الاختبار: ${durationMinutes} دقيقة`
+          : "هذا الاختبار بدون وقت محدد.";
         renderQuestions();
+        form.style.display = "none";
       } catch (err) {
         statusEl.textContent = "خطأ: " + err.message;
       }
@@ -64,25 +83,36 @@
       });
     }
 
-    document.getElementById("submitBtn").addEventListener("click", async (e) => {
-      e.preventDefault();
-      const studentName = document.getElementById("studentName").value.trim();
+    function getAnswers(requireAll) {
+      const answers = {};
+      for (const q of questions) {
+        const selected = document.querySelector(`input[name="q_${q.id}"]:checked`);
+        if (!selected) {
+          if (requireAll) {
+            statusEl.textContent = "الرجاء الإجابة على جميع الأسئلة.";
+            return null;
+          }
+          continue;
+        }
+        answers[String(q.id)] = selected.value;
+      }
+      return answers;
+    }
+
+    async function submitQuiz(isAutoSubmit) {
+      if (isSubmitting || isSubmitted) return;
+      const studentName = studentNameEl.value.trim();
       if (!studentName) {
         statusEl.textContent = "الرجاء إدخال اسم الطالب.";
         return;
       }
 
-      const answers = {};
-      for (const q of questions) {
-        const selected = document.querySelector(`input[name="q_${q.id}"]:checked`);
-        if (!selected) {
-          statusEl.textContent = "الرجاء الإجابة على جميع الأسئلة.";
-          return;
-        }
-        answers[String(q.id)] = selected.value;
-      }
+      const answers = getAnswers(!isAutoSubmit);
+      if (answers === null) return;
 
       statusEl.textContent = "جاري إرسال الإجابات...";
+      isSubmitting = true;
+      submitBtn.disabled = true;
       try {
         const res = await fetch(`/api/submit/${encodeURIComponent(token)}`, {
           method: "POST",
@@ -91,10 +121,67 @@
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "تعذر إرسال الإجابات.");
+        isSubmitted = true;
+        if (startKey) localStorage.removeItem(startKey);
+        if (countdownInterval) clearInterval(countdownInterval);
         showResults(data);
       } catch (err) {
         statusEl.textContent = "خطأ: " + err.message;
+        submitBtn.disabled = false;
+      } finally {
+        isSubmitting = false;
       }
+    }
+
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }
+
+    function startCountdown() {
+      if (durationMinutes <= 0) return;
+      countdownEl.style.display = "block";
+      const totalSeconds = durationMinutes * 60;
+      let startedAt = startKey ? Number(localStorage.getItem(startKey) || "0") : 0;
+      if (!startedAt) {
+        startedAt = Date.now();
+        if (startKey) localStorage.setItem(startKey, String(startedAt));
+      }
+
+      const tick = () => {
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        const remaining = Math.max(0, totalSeconds - elapsed);
+        countdownEl.textContent = `الوقت المتبقي: ${formatTime(remaining)}`;
+        if (remaining <= 0 && !isSubmitted) {
+          countdownEl.textContent = "انتهى الوقت. سيتم إرسال الإجابات تلقائيًا.";
+          submitQuiz(true);
+        }
+      };
+
+      tick();
+      countdownInterval = setInterval(tick, 1000);
+    }
+
+    startBtn.addEventListener("click", () => {
+      if (isStarted) return;
+      const studentName = studentNameEl.value.trim();
+      if (!studentName) {
+        statusEl.textContent = "الرجاء إدخال اسم الطالب قبل بدء الاختبار.";
+        return;
+      }
+      isStarted = true;
+      studentNameEl.readOnly = true;
+      startBtn.disabled = true;
+      form.style.display = "block";
+      submitBtn.style.display = "inline-block";
+      statusEl.textContent = "بدأ الاختبار. بالتوفيق.";
+      startCountdown();
+    });
+
+    submitBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      submitQuiz(false);
     });
 
     function showResults(data) {

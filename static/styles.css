@@ -55,6 +55,15 @@ button:hover {
   background: #0047b2;
 }
 
+.app > button {
+  margin-bottom: 10px;
+}
+
+.small-btn {
+  padding: 6px 10px;
+  font-size: 14px;
+}
+
 .muted {
   color: #5b6b81;
 }
@@ -92,4 +101,23 @@ table {
 th, td {
   border-bottom: 1px solid #e3e8f2;
   padding: 10px;
+}
+
+.details-box {
+  background: #f9fbff;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.wrong-item {
+  border-bottom: 1px dashed #d6deea;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.wrong-item:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
 }

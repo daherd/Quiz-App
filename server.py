@@ -2,7 +2,7 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,6 +33,13 @@ def init_db() -> None:
         )
         """
     )
+    cur.execute("PRAGMA table_info(quizzes)")
+    quiz_columns = {row[1] for row in cur.fetchall()}
+    if "duration_minutes" not in quiz_columns:
+        cur.execute("ALTER TABLE quizzes ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 0")
+    if "creator_utc_offset_minutes" not in quiz_columns:
+        cur.execute("ALTER TABLE quizzes ADD COLUMN creator_utc_offset_minutes INTEGER NOT NULL DEFAULT 0")
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS submissions (
@@ -200,8 +207,18 @@ class QuizHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             title = (payload.get("title") or "").strip()
             csv_text = payload.get("csv_text") or ""
+            duration_minutes = payload.get("duration_minutes", 0)
+            creator_utc_offset_minutes = payload.get("creator_utc_offset_minutes", 0)
             if not title:
                 raise ValueError("Quiz title is required.")
+            if not isinstance(duration_minutes, int) or duration_minutes < 0 or duration_minutes > 600:
+                raise ValueError("duration_minutes must be an integer between 0 and 600.")
+            if (
+                not isinstance(creator_utc_offset_minutes, int)
+                or creator_utc_offset_minutes < -840
+                or creator_utc_offset_minutes > 840
+            ):
+                raise ValueError("creator_utc_offset_minutes must be an integer between -840 and 840.")
             questions = parse_csv_questions(csv_text)
 
             student_token = uuid.uuid4().hex[:16]
@@ -211,8 +228,10 @@ class QuizHandler(BaseHTTPRequestHandler):
             cur = conn.cursor()
             cur.execute(
                 """
-                INSERT INTO quizzes (title, student_token, admin_token, questions_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO quizzes (
+                    title, student_token, admin_token, questions_json, created_at, duration_minutes, creator_utc_offset_minutes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     title,
@@ -220,6 +239,8 @@ class QuizHandler(BaseHTTPRequestHandler):
                     admin_token,
                     json.dumps(questions, ensure_ascii=False),
                     utc_now_iso(),
+                    duration_minutes,
+                    creator_utc_offset_minutes,
                 ),
             )
             conn.commit()
@@ -234,6 +255,7 @@ class QuizHandler(BaseHTTPRequestHandler):
                     "student_link": f"{base}/?quiz={student_token}",
                     "monitor_link": f"{base}/monitor?quiz={student_token}&admin={admin_token}",
                     "question_count": len(questions),
+                    "duration_minutes": duration_minutes,
                 },
                 HTTPStatus.CREATED,
             )
@@ -246,7 +268,7 @@ class QuizHandler(BaseHTTPRequestHandler):
         conn = self._conn()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, title, questions_json FROM quizzes WHERE student_token = ?",
+            "SELECT id, title, questions_json, duration_minutes FROM quizzes WHERE student_token = ?",
             (student_token,),
         )
         row = cur.fetchone()
@@ -255,7 +277,7 @@ class QuizHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "Quiz not found."}, HTTPStatus.NOT_FOUND)
             return
 
-        quiz_id, title, questions_json = row
+        quiz_id, title, questions_json, duration_minutes = row
         questions = json.loads(questions_json)
         public_questions = [
             {
@@ -271,6 +293,7 @@ class QuizHandler(BaseHTTPRequestHandler):
                 "quiz_id": quiz_id,
                 "title": title,
                 "questions": public_questions,
+                "duration_minutes": int(duration_minutes or 0),
             }
         )
 
@@ -362,7 +385,7 @@ class QuizHandler(BaseHTTPRequestHandler):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, title
+            SELECT id, title, questions_json, duration_minutes, creator_utc_offset_minutes
             FROM quizzes
             WHERE student_token = ? AND admin_token = ?
             """,
@@ -374,10 +397,12 @@ class QuizHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "Unauthorized or quiz not found."}, HTTPStatus.UNAUTHORIZED)
             return
 
-        quiz_id, title = quiz
+        quiz_id, title, questions_json, duration_minutes, creator_utc_offset_minutes = quiz
+        questions = json.loads(questions_json)
+        questions_by_id = {str(q["id"]): q for q in questions}
         cur.execute(
             """
-            SELECT student_name, score, total, submitted_at
+            SELECT student_name, score, total, submitted_at, answers_json
             FROM submissions
             WHERE quiz_id = ?
             ORDER BY submitted_at DESC
@@ -387,24 +412,99 @@ class QuizHandler(BaseHTTPRequestHandler):
         rows = cur.fetchall()
         conn.close()
 
-        submissions = [
-            {
-                "student_name": r[0],
-                "score": r[1],
-                "total": r[2],
-                "submitted_at": r[3],
+        question_stats_by_id = {
+            str(q["id"]): {
+                "question_id": q["id"],
+                "question": q["question"],
+                "correct_option": q["correct_option"],
+                "correct_count": 0,
+                "wrong_count": 0,
+                "unanswered_count": 0,
+                "option_counts": {"A": 0, "B": 0, "C": 0, "D": 0},
             }
-            for r in rows
-        ]
+            for q in questions
+        }
+
+        submissions = []
+        for r in rows:
+            student_name, score, total, submitted_at, answers_json = r
+            try:
+                answers = json.loads(answers_json)
+            except Exception:
+                answers = {}
+            submitted_dt_utc = datetime.fromisoformat(submitted_at)
+            submitted_dt_local = submitted_dt_utc - timedelta(minutes=int(creator_utc_offset_minutes or 0))
+            submitted_at_local = submitted_dt_local.strftime("%Y-%m-%d %H:%M:%S")
+
+            wrong_questions = []
+            for qid, q in questions_by_id.items():
+                selected = (answers.get(qid) or "").upper()
+                correct = q["correct_option"]
+                if selected in {"A", "B", "C", "D"}:
+                    question_stats_by_id[qid]["option_counts"][selected] += 1
+                else:
+                    question_stats_by_id[qid]["unanswered_count"] += 1
+
+                if selected == correct:
+                    question_stats_by_id[qid]["correct_count"] += 1
+                else:
+                    question_stats_by_id[qid]["wrong_count"] += 1
+
+                if selected != correct:
+                    wrong_questions.append(
+                        {
+                            "question_id": q["id"],
+                            "question": q["question"],
+                            "selected_option": selected if selected in {"A", "B", "C", "D"} else None,
+                            "selected_text": q["options"].get(selected) if selected in {"A", "B", "C", "D"} else None,
+                            "correct_option": correct,
+                            "correct_text": q["options"][correct],
+                            "explanation": q["explanation"],
+                        }
+                    )
+
+            submissions.append(
+                {
+                    "student_name": student_name,
+                    "score": score,
+                    "total": total,
+                    "submitted_at": submitted_at,
+                    "submitted_at_local": submitted_at_local,
+                    "wrong_count": len(wrong_questions),
+                    "wrong_questions": wrong_questions,
+                }
+            )
         avg = round(sum(r["score"] for r in submissions) / len(submissions), 2) if submissions else 0
+        total_submissions = len(submissions)
+        question_stats = []
+        for q in questions:
+            qid = str(q["id"])
+            stats = question_stats_by_id[qid]
+            if total_submissions > 0:
+                correct_pct = round((stats["correct_count"] / total_submissions) * 100, 1)
+                wrong_pct = round((stats["wrong_count"] / total_submissions) * 100, 1)
+            else:
+                correct_pct = 0.0
+                wrong_pct = 0.0
+            question_stats.append(
+                {
+                    **stats,
+                    "correct_percentage": correct_pct,
+                    "wrong_percentage": wrong_pct,
+                    "total_submissions": total_submissions,
+                }
+            )
 
         self._send_json(
             {
                 "ok": True,
                 "title": title,
+                "duration_minutes": int(duration_minutes or 0),
+                "creator_utc_offset_minutes": int(creator_utc_offset_minutes or 0),
                 "submissions_count": len(submissions),
                 "average_score": avg,
                 "submissions": submissions,
+                "question_stats": question_stats,
             }
         )
 

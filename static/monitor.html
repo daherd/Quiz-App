@@ -9,17 +9,35 @@
 <body>
   <main class="app">
     <h1 id="title">متابعة نتائج الاختبار</h1>
-    <p class="muted">يتم التحديث كل 15 ثانية.</p>
+    <p class="muted">يتم التحديث عند الضغط على زر التحديث أو عند إعادة تحميل الصفحة.</p>
+    <button id="refreshBtn" type="button">تحديث النتائج</button>
     <p id="status" class="muted"></p>
 
     <section class="card" id="summary"></section>
+    <section class="card">
+      <h3>تحليل جماعي لكل سؤال</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>السؤال</th>
+            <th>صحيح</th>
+            <th>خطأ</th>
+            <th>بدون إجابة</th>
+            <th>نسبة الصحة</th>
+          </tr>
+        </thead>
+        <tbody id="questionRows"></tbody>
+      </table>
+    </section>
     <section class="card">
       <table>
         <thead>
           <tr>
             <th>اسم الطالب</th>
             <th>النتيجة</th>
-            <th>وقت التسليم (UTC)</th>
+            <th>عدد الأخطاء</th>
+            <th id="submittedAtHeader">وقت التسليم</th>
+            <th>تفاصيل</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -32,6 +50,15 @@
     const quiz = params.get("quiz");
     const admin = params.get("admin");
 
+    function formatUtcOffsetLabel(offsetMinutes) {
+      const total = -Number(offsetMinutes || 0);
+      const sign = total >= 0 ? "+" : "-";
+      const abs = Math.abs(total);
+      const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+      const mm = String(abs % 60).padStart(2, "0");
+      return `UTC${sign}${hh}:${mm}`;
+    }
+
     async function load() {
       if (!quiz || !admin) {
         document.getElementById("status").textContent = "الرابط غير صحيح أو ناقص.";
@@ -42,24 +69,76 @@
         const res = await fetch(`/api/results/${encodeURIComponent(quiz)}?admin=${encodeURIComponent(admin)}`);
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "تعذر تحميل النتائج.");
+        const tzLabel = formatUtcOffsetLabel(data.creator_utc_offset_minutes);
+        document.getElementById("submittedAtHeader").textContent = `وقت التسليم (${tzLabel})`;
 
         document.getElementById("title").textContent = "متابعة نتائج: " + data.title;
         document.getElementById("summary").innerHTML = `
           <h3>ملخص</h3>
           <p>عدد التسليمات: ${data.submissions_count}</p>
           <p>متوسط الدرجات: ${data.average_score}</p>
+          <p>مدة الاختبار: ${data.duration_minutes > 0 ? `${data.duration_minutes} دقيقة` : "بدون وقت"}</p>
         `;
+
+        const questionRows = document.getElementById("questionRows");
+        questionRows.innerHTML = "";
+        data.question_stats.forEach((q) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${q.question}</td>
+            <td class="correct">${q.correct_count}</td>
+            <td class="wrong">${q.wrong_count}</td>
+            <td>${q.unanswered_count}</td>
+            <td>${q.correct_percentage}%</td>
+          `;
+          questionRows.appendChild(tr);
+        });
 
         const rows = document.getElementById("rows");
         rows.innerHTML = "";
-        data.submissions.forEach((s) => {
+        data.submissions.forEach((s, idx) => {
+          const detailId = `details_${idx}`;
+          const wrongItems = s.wrong_questions.map((w, wIdx) => `
+            <div class="wrong-item">
+              <p><strong>سؤال ${wIdx + 1}:</strong> ${w.question}</p>
+              <p>إجابة الطالب: ${w.selected_option ? `${w.selected_option}) ${w.selected_text}` : "لم يجب"}</p>
+              <p>الإجابة الصحيحة: <strong>${w.correct_option}) ${w.correct_text}</strong></p>
+              <p>الشرح: ${w.explanation}</p>
+            </div>
+          `).join("");
+
           const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>${s.student_name}</td>
             <td>${s.score} / ${s.total}</td>
-            <td>${s.submitted_at}</td>
+            <td>${s.wrong_count}</td>
+            <td>${s.submitted_at_local}</td>
+            <td><button type="button" class="small-btn" data-target="${detailId}">عرض</button></td>
           `;
           rows.appendChild(tr);
+
+          const detailsTr = document.createElement("tr");
+          detailsTr.id = detailId;
+          detailsTr.style.display = "none";
+          detailsTr.innerHTML = `
+            <td colspan="5">
+              <div class="details-box">
+                <h4>الأسئلة الخاطئة - ${s.student_name}</h4>
+                ${s.wrong_count === 0 ? "<p class='correct'>لا يوجد أخطاء.</p>" : wrongItems}
+              </div>
+            </td>
+          `;
+          rows.appendChild(detailsTr);
+        });
+
+        rows.querySelectorAll(".small-btn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const target = document.getElementById(btn.dataset.target);
+            if (!target) return;
+            const hidden = target.style.display === "none";
+            target.style.display = hidden ? "table-row" : "none";
+            btn.textContent = hidden ? "إخفاء" : "عرض";
+          });
         });
 
         document.getElementById("status").textContent = "تم التحديث.";
@@ -68,8 +147,8 @@
       }
     }
 
+    document.getElementById("refreshBtn").addEventListener("click", load);
     load();
-    setInterval(load, 15000);
   </script>
 </body>
 </html>
